@@ -24,8 +24,12 @@ install: build
 restart-panel:
 	pkill cosmic-panel || true
 
+.PHONY: restart-applet
+restart-applet:
+	pkill -f cosmic-applet-window-list || true
+
 .PHONY: install-restart
-install-restart: install restart-panel
+install-restart: install restart-applet
 
 .PHONY: uninstall
 uninstall:

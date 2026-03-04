@@ -1,6 +1,7 @@
 use cctk::{
     sctk::reexports::calloop,
     wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+    wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtWorkspaceHandleV1,
     toplevel_info::ToplevelInfo,
 };
 use cosmic::iced::{Subscription, stream};
@@ -16,6 +17,7 @@ pub enum WaylandUpdate {
     Init(calloop::channel::Sender<WaylandRequest>),
     Finished,
     Toplevel(ToplevelUpdate),
+    Workspace(Vec<ExtWorkspaceHandleV1>),
 }
 
 #[derive(Clone, Debug)]
@@ -58,7 +60,6 @@ pub fn wayland_subscription() -> Subscription<WaylandUpdate> {
             
             let _ = output.send(WaylandUpdate::Finished).await;
             
-            // Keep the stream alive but pending
             futures::future::pending().await
         }),
     )
