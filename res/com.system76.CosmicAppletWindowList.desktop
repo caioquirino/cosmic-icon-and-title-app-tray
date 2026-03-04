@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Window List
+Comment=A COSMIC applet showing window icons and titles
+Type=Application
+Icon=view-list-symbolic
+Exec=cosmic-applet-window-list
+Terminal=false
+Categories=Cosmic;Applet;
+X-CosmicApplet=true
