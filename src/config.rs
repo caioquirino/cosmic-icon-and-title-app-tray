@@ -9,7 +9,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            show_all_workspaces: true,
+            show_all_workspaces: false,
         }
     }
 }
