@@ -4,10 +4,11 @@ use cosmic_applet_window_list::wayland_subscription::{
     wayland_subscription, ToplevelUpdate, WaylandRequest, WaylandUpdate, ToplevelRequest,
 };
 use cctk::toplevel_info::ToplevelInfo;
+use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1::State;
 use cctk::wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
 use cctk::wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtWorkspaceHandleV1;
 use cosmic::app::{Core};
-use cosmic::iced::{Alignment, Length, Subscription, Limits, window, Background, Color};
+use cosmic::iced::{Alignment, Length, Subscription, Limits, window, Background, Color, Border};
 use cosmic::iced::advanced::text::{Ellipsize, EllipsizeHeightLimit};
 use cosmic::widget::{self};
 use cosmic::{Element, Task};
@@ -553,16 +554,17 @@ impl cosmic::Application for WindowListApplet {
             }
 
             for (id, _handle, info) in filtered_windows {
+                let is_focused = info.state.contains(&State::Activated);
                 let app_info = get_app_info(&info.app_id, &info.title, &self.app_map);
                 let title = if info.title.is_empty() { "Untitled".to_string() } else { info.title.clone() };
-                
-                let btn_content = widget::container(
+
+                let mut btn_content = widget::container(
                     widget::row()
                         .spacing(8)
                         .align_y(Alignment::Center)
                         .push(
                             widget::icon::icon(widget::icon::from_name(app_info.icon.as_str()).into())
-                                .size(256) 
+                                .size(icon_size_px as u16) 
                                 .width(Length::Fixed(icon_size_px))
                                 .height(Length::Fixed(icon_size_px))
                         )
@@ -573,10 +575,56 @@ impl cosmic::Application for WindowListApplet {
                                 .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
                         )
                 )
-                .height(Length::Fill)
+                .height(Length::Fixed(thickness))
                 .width(Length::Fixed(max_item_w)) // Strict fixed width for titles
                 .padding([0, 14])
                 .center_y(Length::Fill);
+
+                if is_focused {
+                    btn_content = btn_content.style(|theme: &cosmic::Theme| {
+                        widget::container::Style {
+                            border: Border {
+                                color: Color::TRANSPARENT,
+                                width: 0.0,
+                                radius: 0.0.into(),
+                            },
+                            ..Default::default()
+                        }
+                    });
+
+                    // Add a small indicator at the bottom
+                    let indicator = widget::container(widget::column().width(Length::Fill).height(Length::Fixed(2.0)))
+                        .width(Length::Fixed(max_item_w * 0.4))
+                        .height(Length::Fixed(2.0))
+                        .style(|theme: &cosmic::Theme| {
+                            let cosmic = theme.cosmic();
+                            widget::container::Style {
+                                background: Some(Background::Color(Color::from(cosmic.accent_color()))),
+                                border: Border {
+                                    radius: 1.0.into(),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            }
+                        });
+
+
+                    btn_content = widget::container(
+                        widget::column()
+                            .push(btn_content)
+                            .push(
+                                widget::row()
+                                    .width(Length::Fill)
+                                    .align_y(Alignment::End)
+                                    .push(widget::horizontal_space())
+                                    .push(indicator)
+                                    .push(widget::horizontal_space())
+                            )
+                    )
+                    .height(Length::Fixed(thickness))
+                    .width(Length::Fixed(max_item_w))
+                    .align_y(Alignment::End);
+                }
 
                 let btn = widget::button::custom(btn_content)
                     .padding(0) 
@@ -688,24 +736,53 @@ impl cosmic::Application for WindowListApplet {
             }
 
             for (id, _handle, info) in filtered_windows {
+                let is_focused = info.state.contains(&State::Activated);
                 let app_info = get_app_info(&info.app_id, &info.title, &self.app_map);
-                let btn = widget::button::custom(
-                    widget::container(
-                        widget::icon::icon(widget::icon::from_name(app_info.icon.as_str()).into())
-                            .size(icon_size_px as u16)
-                            .width(Length::Fixed(icon_size_px))
-                            .height(Length::Fixed(icon_size_px))
+                
+                let mut btn_content = widget::container(
+                    widget::icon::icon(widget::icon::from_name(app_info.icon.as_str()).into())
+                        .size(icon_size_px as u16)
+                        .width(Length::Fixed(icon_size_px))
+                        .height(Length::Fixed(icon_size_px))
+                )
+                .width(Length::Fixed(thickness))
+                .height(Length::Fixed(thickness))
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center);
+
+                if is_focused {
+                    let indicator = widget::container(widget::row().width(Length::Fixed(2.0)).height(Length::Fill))
+                        .width(Length::Fixed(2.0))
+                        .height(Length::Fixed(thickness * 0.4))
+                        .style(|theme: &cosmic::Theme| {
+                            let cosmic = theme.cosmic();
+                            widget::container::Style {
+                                background: Some(Background::Color(Color::from(cosmic.accent_color()))),
+                                border: Border {
+                                    radius: 1.0.into(),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            }
+                        });
+
+
+                    btn_content = widget::container(
+                        widget::row()
+                            .push(indicator)
+                            .push(btn_content)
                     )
                     .width(Length::Fixed(thickness))
                     .height(Length::Fixed(thickness))
-                    .align_x(Alignment::Center)
-                    .align_y(Alignment::Center)
-                )
-                .padding(0)
-                .width(Length::Fixed(thickness))
-                .height(Length::Fixed(thickness))
-                .on_press(Message::Activate(*id))
-                .class(win11_button_style());
+                    .align_x(Alignment::Start);
+                }
+
+                let btn = widget::button::custom(btn_content)
+                    .padding(0) 
+                    .width(Length::Fixed(thickness))
+                    .height(Length::Fixed(thickness))
+                    .on_press(Message::Activate(*id))
+                    .class(win11_button_style());
 
                 let mut menu_items = Vec::new();
 
