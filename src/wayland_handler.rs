@@ -174,7 +174,27 @@ pub fn wayland_handler(
                        }
                    }
                 }
-                _ => {}
+                ToplevelRequest::Minimize(handle) => {
+                   if let Some(info) = state.toplevel_info_state.info(&handle) {
+                       if let Some(cosmic_toplevel) = &info.cosmic_toplevel {
+                           state.toplevel_manager_state.manager.set_minimized(cosmic_toplevel);
+                       }
+                   }
+                }
+                ToplevelRequest::Quit(handle) => {
+                   if let Some(info) = state.toplevel_info_state.info(&handle) {
+                       if let Some(cosmic_toplevel) = &info.cosmic_toplevel {
+                           state.toplevel_manager_state.manager.close(cosmic_toplevel);
+                       }
+                   }
+                }
+                ToplevelRequest::Maximize(handle) => {
+                   if let Some(info) = state.toplevel_info_state.info(&handle) {
+                       if let Some(cosmic_toplevel) = &info.cosmic_toplevel {
+                           state.toplevel_manager_state.manager.set_maximized(cosmic_toplevel);
+                       }
+                   }
+                }
             }
         },
         calloop::channel::Event::Closed => {

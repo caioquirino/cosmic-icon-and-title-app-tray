@@ -36,6 +36,7 @@ pub enum WaylandRequest {
 pub enum ToplevelRequest {
     Activate(ExtForeignToplevelHandleV1),
     Minimize(ExtForeignToplevelHandleV1),
+    Maximize(ExtForeignToplevelHandleV1),
     Quit(ExtForeignToplevelHandleV1),
 }
 

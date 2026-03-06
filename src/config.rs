@@ -4,12 +4,14 @@ pub use cosmic::cosmic_config::CosmicConfigEntry;
 #[version = 1]
 pub struct Config {
     pub show_all_workspaces: bool,
+    pub context_menu_text_limit: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             show_all_workspaces: false,
+            context_menu_text_limit: 25,
         }
     }
 }
