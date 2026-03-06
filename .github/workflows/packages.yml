@@ -60,7 +60,7 @@ jobs:
     steps:
       # Install git before checkout so actions/checkout can use the system git
       - name: Install build dependencies
-        run: pacman -Syu --noconfirm base-devel rust cargo git
+        run: pacman -Syu --noconfirm base-devel rust cargo git wayland libxkbcommon
 
       - uses: actions/checkout@v4
 
