@@ -1,7 +1,7 @@
 use cosmic_applet_window_list::{
     app_map::{AppInfo, build_app_map, get_app_info},
     config::Config,
-    styles::{strip_exec_args, truncate_text, win11_button_style},
+    styles::{strip_exec_args, truncate_text, win11_button_style, win11_pinned_style},
     wayland_subscription::{wayland_subscription, ToplevelRequest, ToplevelUpdate, WaylandRequest, WaylandUpdate},
 };
 use cctk::toplevel_info::ToplevelInfo;
@@ -112,30 +112,23 @@ fn pinned_menu_items(pin_idx: usize) -> Vec<cosmic::widget::menu::Item<WindowAct
     ]
 }
 
-fn active_indicator_h<'a>(width: f32) -> cosmic::Element<'a, Message> {
-    widget::container(widget::column().width(Length::Fill).height(Length::Fixed(2.0)))
+fn window_indicator<'a>(is_focused: bool, width: f32) -> cosmic::Element<'a, Message> {
+    let indicator_h = 2.0f32;
+    widget::container(widget::horizontal_space())
         .width(Length::Fixed(width))
-        .height(Length::Fixed(2.0))
-        .style(|theme: &cosmic::Theme| {
+        .height(Length::Fixed(indicator_h))
+        .style(move |theme: &cosmic::Theme| {
             let cosmic = theme.cosmic();
+            let color = if is_focused {
+                Color::from(cosmic.accent_color())
+            } else {
+                let mut c = Color::from(cosmic.on_bg_color());
+                c.a = 0.4;
+                c
+            };
             widget::container::Style {
-                background: Some(Background::Color(Color::from(cosmic.accent_color()))),
-                border: Border { radius: 1.0.into(), ..Default::default() },
-                ..Default::default()
-            }
-        })
-        .into()
-}
-
-fn active_indicator_v<'a>(height: f32) -> cosmic::Element<'a, Message> {
-    widget::container(widget::row().width(Length::Fixed(2.0)).height(Length::Fill))
-        .width(Length::Fixed(2.0))
-        .height(Length::Fixed(height))
-        .style(|theme: &cosmic::Theme| {
-            let cosmic = theme.cosmic();
-            widget::container::Style {
-                background: Some(Background::Color(Color::from(cosmic.accent_color()))),
-                border: Border { radius: 1.0.into(), ..Default::default() },
+                background: Some(Background::Color(color)),
+                border: Border { radius: (indicator_h / 2.0).into(), ..Default::default() },
                 ..Default::default()
             }
         })
@@ -224,7 +217,7 @@ impl WindowListApplet {
             .width(Length::Fixed(thickness))
             .height(Length::Fixed(thickness))
             .on_press(Message::LaunchApp(app_id.to_string()))
-            .class(win11_button_style());
+            .class(win11_pinned_style());
 
         let menu_tree = cosmic::widget::menu::items(&HashMap::new(), pinned_menu_items(pin_idx));
         widget::context_menu(btn, Some(menu_tree))
@@ -245,58 +238,54 @@ impl WindowListApplet {
         let app_info = get_app_info(&info.app_id, &self.app_map);
         let title = if info.title.is_empty() { "Untitled".to_string() } else { info.title.clone() };
 
-        let mut content = widget::container(
-            widget::row()
-                .spacing(8)
-                .align_y(Alignment::Center)
+        let indicator_w: f32 = if is_focused { (icon_size_px * 0.5).max(8.0).min(20.0) } else { 5.0 };
+        let indicator_gap: f32 = 2.0;
+        // Align indicator center to icon center (icon starts at 14px left padding)
+        let left_offset: f32 = (14.0 + (icon_size_px - indicator_w) / 2.0).max(0.0);
+
+        let indicator_strip = widget::container(window_indicator(is_focused, indicator_w))
+            .width(Length::Fixed(active_item_width))
+            .height(Length::Fixed(2.0 + indicator_gap))
+            .padding([indicator_gap, 0.0, 0.0, left_offset]);
+
+        let content = widget::container(
+            widget::column()
                 .push(
-                    widget::icon::from_name(app_info.icon.as_str())
-                        .size(icon_size_px as u16)
-                        .prefer_svg(true)
-                        .icon()
-                        .width(Length::Fixed(icon_size_px))
-                        .height(Length::Fixed(icon_size_px)),
+                    widget::container(
+                        widget::row()
+                            .spacing(8)
+                            .align_y(Alignment::Center)
+                            .push(
+                                widget::icon::from_name(app_info.icon.as_str())
+                                    .size(icon_size_px as u16)
+                                    .prefer_svg(true)
+                                    .icon()
+                                    .width(Length::Fixed(icon_size_px))
+                                    .height(Length::Fixed(icon_size_px)),
+                            )
+                            .push(
+                                widget::text::text(title)
+                                    .size(font_size)
+                                    .width(Length::Fill)
+                                    .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+                            ),
+                    )
+                    .height(Length::Fill)
+                    .width(Length::Fixed(active_item_width))
+                    .padding([0, 14])
+                    .center_y(Length::Fill),
                 )
-                .push(
-                    widget::text::text(title)
-                        .size(font_size)
-                        .width(Length::Fill)
-                        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
-                ),
+                .push(indicator_strip),
         )
         .height(Length::Fixed(thickness))
-        .width(Length::Fixed(active_item_width))
-        .padding([0, 14])
-        .center_y(Length::Fill);
-
-        if is_focused {
-            content = content.style(|_theme: &cosmic::Theme| widget::container::Style {
-                border: Border { color: Color::TRANSPARENT, width: 0.0, radius: 0.0.into() },
-                ..Default::default()
-            });
-            content = widget::container(
-                widget::column()
-                    .push(content)
-                    .push(
-                        widget::row()
-                            .width(Length::Fill)
-                            .align_y(Alignment::End)
-                            .push(widget::horizontal_space())
-                            .push(active_indicator_h(active_item_width * 0.4))
-                            .push(widget::horizontal_space()),
-                    ),
-            )
-            .height(Length::Fixed(thickness))
-            .width(Length::Fixed(active_item_width))
-            .align_y(Alignment::End);
-        }
+        .width(Length::Fixed(active_item_width));
 
         let btn = widget::button::custom(content)
             .padding(0)
             .height(Length::Fixed(thickness))
             .width(Length::Fixed(active_item_width))
             .on_press(Message::Activate(id))
-            .class(win11_button_style());
+            .class(win11_button_style(is_focused));
 
         let menu_tree = cosmic::widget::menu::items(&HashMap::new(), self.window_menu_items(id, info, &app_info));
         widget::context_menu(btn, Some(menu_tree))
@@ -314,36 +303,41 @@ impl WindowListApplet {
         let is_focused = info.state.contains(&State::Activated);
         let app_info = get_app_info(&info.app_id, &self.app_map);
 
-        let mut content = widget::container(
-            widget::icon::from_name(app_info.icon.as_str())
-                .size(icon_size_px as u16)
-                .prefer_svg(true)
-                .icon()
-                .width(Length::Fixed(icon_size_px))
-                .height(Length::Fixed(icon_size_px)),
+        let indicator_w: f32 = if is_focused { (icon_size_px * 0.5).max(8.0).min(20.0) } else { 5.0 };
+        let indicator_gap: f32 = 3.0;
+
+        let indicator_strip = widget::container(window_indicator(is_focused, indicator_w))
+            .width(Length::Fixed(thickness))
+            .height(Length::Fixed(2.0 + indicator_gap))
+            .padding([indicator_gap, 0.0, 0.0, 0.0])
+            .align_x(Alignment::Center);
+
+        let content = widget::container(
+            widget::column()
+                .align_x(Alignment::Center)
+                .push(
+                    widget::container(
+                        widget::icon::from_name(app_info.icon.as_str())
+                            .size(icon_size_px as u16)
+                            .prefer_svg(true)
+                            .icon()
+                            .width(Length::Fixed(icon_size_px))
+                            .height(Length::Fixed(icon_size_px)),
+                    )
+                    .height(Length::Fill)
+                    .center_y(Length::Fill),
+                )
+                .push(indicator_strip),
         )
         .width(Length::Fixed(thickness))
-        .height(Length::Fixed(thickness))
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center);
-
-        if is_focused {
-            content = widget::container(
-                widget::row()
-                    .push(active_indicator_v(thickness * 0.4))
-                    .push(content),
-            )
-            .width(Length::Fixed(thickness))
-            .height(Length::Fixed(thickness))
-            .align_x(Alignment::Start);
-        }
+        .height(Length::Fixed(thickness));
 
         let btn = widget::button::custom(content)
             .padding(0)
             .width(Length::Fixed(thickness))
             .height(Length::Fixed(thickness))
             .on_press(Message::Activate(id))
-            .class(win11_button_style());
+            .class(win11_button_style(is_focused));
 
         let menu_tree = cosmic::widget::menu::items(&HashMap::new(), self.window_menu_items(id, info, &app_info));
         widget::context_menu(btn, Some(menu_tree))
