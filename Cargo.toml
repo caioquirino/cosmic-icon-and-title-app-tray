@@ -4,17 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0"
 cctk = { git = "https://github.com/pop-os/cosmic-protocols", package = "cosmic-client-toolkit" }
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", default-features = false, features = ["client"] }
 futures = "0.3"
-image = { version = "0.25", default-features = false }
 cosmic = { git = "https://github.com/pop-os/libcosmic", package = "libcosmic", features = ["applet", "tokio", "wayland"] }
-memmap2 = "0.9"
 rustix = { version = "1.1", features = ["fs", "process"] }
 tokio = { version = "1.49", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_derive = "1.0"
 cosmic-config = { git = "https://github.com/pop-os/libcosmic" }

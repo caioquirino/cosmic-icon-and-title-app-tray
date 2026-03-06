@@ -979,17 +979,13 @@ dependencies = [
 name = "cosmic-applet-window-list"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "cosmic-client-toolkit 0.2.0",
  "cosmic-config",
  "cosmic-protocols 0.2.0",
  "futures",
- "image",
  "libcosmic",
- "memmap2 0.9.10",
  "rustix 1.1.4",
  "serde",
- "serde_derive",
  "tokio",
  "tracing",
  "tracing-subscriber",
