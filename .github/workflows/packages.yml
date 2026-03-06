@@ -11,20 +11,12 @@ env:
   BINARY: cosmic-applet-window-list
 
 jobs:
-  # ── Build binary + .deb + .rpm on Ubuntu ──────────────────────────────────
+  # ── Build binary + .deb + .rpm on Ubuntu (runs in parallel with arch) ─────
   linux:
     name: Linux packages (deb + rpm)
     runs-on: ubuntu-22.04
-    outputs:
-      version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Read version from Cargo.toml
-        id: version
-        run: |
-          echo "value=$(grep '^version' Cargo.toml | head -1 | sed 's/.*\"\(.*\)\".*/\1/')" >> $GITHUB_OUTPUT
-
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
@@ -59,26 +51,75 @@ jobs:
           name: rpm
           path: target/generate-rpm/*.rpm
 
-  # ── Arch Linux: PKGBUILD + .pkg.tar.zst ───────────────────────────────────
+  # ── Arch Linux: .pkg.tar.zst + AUR PKGBUILD (runs in parallel with linux) ─
   arch:
     name: Arch Linux package
-    needs: linux
     runs-on: ubuntu-22.04
     container:
       image: archlinux:latest
-    env:
-      VERSION: ${{ needs.linux.outputs.version }}
     steps:
-      # Install git first so actions/checkout can use it
-      - name: Install base dependencies
+      # Install git before checkout so actions/checkout can use the system git
+      - name: Install build dependencies
         run: pacman -Syu --noconfirm base-devel rust cargo git
 
       - uses: actions/checkout@v4
 
-      - name: Generate PKGBUILD
+      - name: Read version
+        id: version
         run: |
-          cat > PKGBUILD << EOF
+          echo "value=$(grep '^version' Cargo.toml | head -1 | sed 's/.*\"\(.*\)\".*/\1/')" >> $GITHUB_OUTPUT
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Strip binary
+        run: strip target/release/${{ env.BINARY }}
+
+      - name: Create .pkg.tar.zst and generate AUR PKGBUILD
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          REPO_DIR=$(pwd)
+
+          # ── AUR PKGBUILD ────────────────────────────────────────────────────
+          # Single-quoted heredoc: nothing is shell-expanded, so ${pkgname} etc.
+          # are written literally. Version is injected via sed afterwards.
+          cat > PKGBUILD << 'ENDAUR'
           # Maintainer: Caio Quirino <https://github.com/caioquirino>
+          pkgname=cosmic-applet-window-list
+          pkgver=PKGVER_PLACEHOLDER
+          pkgrel=1
+          pkgdesc='COSMIC desktop panel applet showing open window icons and titles (Windows 11-style taskbar)'
+          arch=('x86_64' 'aarch64')
+          url='https://github.com/caioquirino/cosmic-icon-and-title-app-tray'
+          license=('MIT')
+          depends=('wayland' 'libxkbcommon')
+          makedepends=('rust' 'cargo')
+          source=("${pkgname}-${pkgver}.tar.gz::https://github.com/caioquirino/cosmic-icon-and-title-app-tray/archive/refs/tags/v${pkgver}.tar.gz")
+          # Replace SKIP with the real checksum before AUR submission:
+          #   curl -sL "<source_url>" | sha256sum
+          sha256sums=('SKIP')
+
+          build() {
+            cd "${srcdir}/cosmic-icon-and-title-app-tray-${pkgver}"
+            cargo build --release --config 'net.git-fetch-with-cli = true'
+          }
+
+          package() {
+            cd "${srcdir}/cosmic-icon-and-title-app-tray-${pkgver}"
+            install -Dm755 target/release/cosmic-applet-window-list \
+              "${pkgdir}/usr/bin/cosmic-applet-window-list"
+            install -Dm644 res/com.system76.CosmicAppletWindowList.desktop \
+              "${pkgdir}/usr/share/applications/com.system76.CosmicAppletWindowList.desktop"
+          }
+          ENDAUR
+          sed -i "s/PKGVER_PLACEHOLDER/${VERSION}/" PKGBUILD
+
+          # ── CI PKGBUILD ─────────────────────────────────────────────────────
+          # Uses source=() so makepkg never tries to download anything.
+          # package() references the pre-built binary via absolute path.
+          mkdir -p /tmp/ci-pkg
+          cat > /tmp/ci-pkg/PKGBUILD << ENDCI
           pkgname=cosmic-applet-window-list
           pkgver=${VERSION}
           pkgrel=1
@@ -87,40 +128,25 @@ jobs:
           url='https://github.com/caioquirino/cosmic-icon-and-title-app-tray'
           license=('MIT')
           depends=('wayland' 'libxkbcommon')
-          makedepends=('rust' 'cargo')
-          source=("\${pkgname}-\${pkgver}.tar.gz::https://github.com/caioquirino/cosmic-icon-and-title-app-tray/archive/refs/tags/v\${pkgver}.tar.gz")
-          # Update sha256sums before submitting to AUR:
-          #   curl -sL <url> | sha256sum
-          sha256sums=('SKIP')
-
-          build() {
-            cd "\${srcdir}/cosmic-icon-and-title-app-tray-\${pkgver}"
-            cargo build --release --config 'net.git-fetch-with-cli = true'
-          }
+          source=()
+          sha256sums=()
 
           package() {
-            cd "\${srcdir}/cosmic-icon-and-title-app-tray-\${pkgver}"
-            install -Dm755 target/release/cosmic-applet-window-list "\${pkgdir}/usr/bin/cosmic-applet-window-list"
-            install -Dm644 res/com.system76.CosmicAppletWindowList.desktop "\${pkgdir}/usr/share/applications/com.system76.CosmicAppletWindowList.desktop"
+            install -Dm755 ${REPO_DIR}/target/release/cosmic-applet-window-list \
+              "\${pkgdir}/usr/bin/cosmic-applet-window-list"
+            install -Dm644 ${REPO_DIR}/res/com.system76.CosmicAppletWindowList.desktop \
+              "\${pkgdir}/usr/share/applications/com.system76.CosmicAppletWindowList.desktop"
           }
-          EOF
+          ENDCI
 
-      - name: Create source tarball (mirrors GitHub archive format)
-        run: |
-          git archive \
-            --prefix="cosmic-icon-and-title-app-tray-${VERSION}/" \
-            HEAD \
-            | gzip > "cosmic-applet-window-list-${VERSION}.tar.gz"
-
-      - name: Build Arch package
-        run: |
           # makepkg refuses to run as root — create a build user with sudo
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+          chown -R builder:builder /tmp/ci-pkg
           chown -R builder:builder .
-          WORKDIR="$(pwd)"
-          # Pre-place the tarball so makepkg uses it instead of downloading
-          su builder -c "cd $WORKDIR && SRCDEST=$WORKDIR makepkg --noconfirm --syncdeps"
+
+          su builder -c "cd /tmp/ci-pkg && makepkg --nodeps --noconfirm --noprogressbar"
+          cp /tmp/ci-pkg/*.pkg.tar.zst .
 
       - uses: actions/upload-artifact@v4
         with:
