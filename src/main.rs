@@ -28,6 +28,7 @@ pub struct DesktopAction {
 #[derive(Clone, Debug, Default)]
 pub struct AppInfo {
     pub icon: String,
+    pub main_exec: Option<String>,
     pub actions: Vec<DesktopAction>,
 }
 
@@ -40,6 +41,7 @@ struct WindowListApplet {
     connection_finished: bool,
     app_map: HashMap<String, AppInfo>,
     config: Config,
+    config_handler: cosmic::cosmic_config::Config,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +55,9 @@ pub enum Message {
     Spawn(usize, usize),
     AppMapLoaded(HashMap<String, AppInfo>),
     ConfigChanged(Config),
+    LaunchApp(String),
+    LaunchPinned(usize),
+    UnpinPinned(usize),
     OpenSettings,
     OpenAbout,
     SurfaceAction(cosmic::surface::Action),
@@ -81,6 +86,8 @@ pub enum WindowAction {
     ActivateWindow(usize),
     Pin(usize),
     Spawn(usize, usize),
+    LaunchPinned(usize),
+    UnpinPinned(usize),
 }
 
 impl cosmic::widget::menu::action::MenuAction for WindowAction {
@@ -92,6 +99,8 @@ impl cosmic::widget::menu::action::MenuAction for WindowAction {
             WindowAction::ActivateWindow(id) => Message::Activate(*id),
             WindowAction::Pin(id) => Message::Pin(*id),
             WindowAction::Spawn(win_id, act_idx) => Message::Spawn(*win_id, *act_idx),
+            WindowAction::LaunchPinned(idx) => Message::LaunchPinned(*idx),
+            WindowAction::UnpinPinned(idx) => Message::UnpinPinned(*idx),
         }
     }
 }
@@ -117,6 +126,7 @@ fn build_app_map() -> HashMap<String, AppInfo> {
                     if let Ok(content) = fs::read_to_string(&p) {
                         let mut icon = None;
                         let mut wm_class = None;
+                        let mut main_exec = None;
                         let mut actions_list_str = None;
                         let mut action_blocks = HashMap::new();
                         
@@ -142,6 +152,8 @@ fn build_app_map() -> HashMap<String, AppInfo> {
                                     wm_class = Some(line[15..].trim().to_string());
                                 } else if line.starts_with("Actions=") {
                                     actions_list_str = Some(line[8..].trim().to_string());
+                                } else if line.starts_with("Exec=") {
+                                    main_exec = Some(line[5..].trim().to_string());
                                 }
                             } else if let Some(ref action_id) = current_action {
                                 if let Some(action) = action_blocks.get_mut(action_id) {
@@ -168,7 +180,7 @@ fn build_app_map() -> HashMap<String, AppInfo> {
                         }
 
                         if let Some(i) = icon {
-                            let app_info = AppInfo { icon: i, actions };
+                            let app_info = AppInfo { icon: i, main_exec, actions };
                             if let Some(w) = wm_class {
                                 map.insert(w.to_lowercase(), app_info.clone());
                             }
@@ -285,10 +297,8 @@ impl cosmic::Application for WindowListApplet {
     }
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
-        let config = cosmic::cosmic_config::Config::new(Self::APP_ID, 1)
-            .ok()
-            .and_then(|c| Config::get_entry(&c).ok())
-            .unwrap_or_default();
+        let config_handler = cosmic::cosmic_config::Config::new(Self::APP_ID, 1).unwrap();
+        let config = Config::get_entry(&config_handler).ok().unwrap_or_default();
         (
             WindowListApplet {
                 core,
@@ -299,6 +309,7 @@ impl cosmic::Application for WindowListApplet {
                 connection_finished: false,
                 app_map: HashMap::new(),
                 config,
+                config_handler,
             },
             Task::perform(async { build_app_map() }, |m| cosmic::Action::App(Message::AppMapLoaded(m))),
         )
@@ -368,7 +379,21 @@ impl cosmic::Application for WindowListApplet {
             }
             Message::Pin(id) => {
                 if let Some(app_id) = self.windows.iter().find(|(i, _, _)| *i == id).map(|(_, _, info)| info.app_id.clone()) {
-                    println!("Feature: Pin to App Tray requested for app_id={}", app_id);
+                    if self.config.pinned_apps.contains(&app_id) {
+                        self.config.pinned_apps.retain(|a| a != &app_id);
+                    } else {
+                        self.config.pinned_apps.push(app_id.clone());
+                    }
+                    let _ = self.config.write_entry(&self.config_handler);
+                }
+            }
+            Message::LaunchApp(app_id) => {
+                let lower_id = app_id.to_lowercase();
+                if let Some(info) = self.app_map.get(&lower_id) {
+                    if let Some(ref exec) = info.main_exec {
+                        let exec = exec.replace("%u", "").replace("%U", "").replace("%f", "").replace("%F", "");
+                        let _ = std::process::Command::new("sh").arg("-c").arg(&exec).spawn();
+                    }
                 }
             }
             Message::Spawn(window_id, action_idx) => {
@@ -385,6 +410,17 @@ impl cosmic::Application for WindowListApplet {
             }
             Message::ConfigChanged(config) => {
                 self.config = config;
+            }
+            Message::LaunchPinned(idx) => {
+                if let Some(app_id) = self.config.pinned_apps.get(idx).cloned() {
+                    return self.update(Message::LaunchApp(app_id));
+                }
+            }
+            Message::UnpinPinned(idx) => {
+                if idx < self.config.pinned_apps.len() {
+                    self.config.pinned_apps.remove(idx);
+                    let _ = self.config.write_entry(&self.config_handler);
+                }
             }
             Message::OpenSettings => {
                 let _ = std::process::Command::new("cosmic-settings")
@@ -405,11 +441,18 @@ impl cosmic::Application for WindowListApplet {
 
     fn view(&self) -> Element<'_, Self::Message> {
         let is_horizontal = self.core.applet.is_horizontal();
-        let height = self.core.applet.suggested_size(false).1 as f32;
         let suggested_size = self.core.applet.suggested_size(false);
+        let thickness = if is_horizontal { suggested_size.1 } else { suggested_size.0 } as f32;
         
-        let icon_size_px = (height * 0.65).max(16.0);
-        let font_size = (height * 0.40).max(11.0).min(14.0) as u16;
+        let icon_size_px = (thickness * 0.65).max(16.0);
+        let font_size = (thickness * 0.40).max(11.0).min(14.0) as u16;
+
+        let mut closed_pinned_apps = Vec::new();
+        for (idx, app_id) in self.config.pinned_apps.iter().enumerate() {
+            if !self.windows.iter().any(|(_, _, info)| &info.app_id == app_id) {
+                closed_pinned_apps.push((idx, app_id.clone()));
+            }
+        }
 
         let filtered_windows: Vec<_> = if self.config.show_all_workspaces {
             self.windows.iter().collect()
@@ -423,23 +466,25 @@ impl cosmic::Application for WindowListApplet {
             }).collect()
         };
 
-        let list: Element<'_, Self::Message> = if self.connection_finished {
-            widget::container(widget::text::text("Err"))
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .into()
-        } else if filtered_windows.is_empty() {
-            let panel_icon_size = suggested_size.0.max(20);
+        let list_data: (Element<'_, Self::Message>, f32) = if self.connection_finished {
+            (
+                widget::container(widget::text::text("Err"))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+                    .into(),
+                40.0
+            )
+        } else if filtered_windows.is_empty() && closed_pinned_apps.is_empty() {
             let empty_content = widget::container(
                 widget::icon::icon(widget::icon::from_name("view-list-symbolic").into())
-                    .size(64)
-                    .width(Length::Fixed(panel_icon_size as f32))
-                    .height(Length::Fixed(panel_icon_size as f32))
+                    .size(icon_size_px as u16)
+                    .width(Length::Fixed(icon_size_px))
+                    .height(Length::Fixed(icon_size_px))
             )
-            .width(Length::Fixed(panel_icon_size as f32))
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill);
+            .width(Length::Fixed(thickness))
+            .height(Length::Fixed(thickness))
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center);
 
             let key_binds = HashMap::new();
             let menu_items = vec![
@@ -448,14 +493,20 @@ impl cosmic::Application for WindowListApplet {
             ];
             let menu_tree = cosmic::widget::menu::items(&key_binds, menu_items);
 
-            widget::context_menu(empty_content, Some(menu_tree))
-                .on_surface_action(Message::SurfaceAction)
-                .into()
+            (
+                widget::context_menu(empty_content, Some(menu_tree))
+                    .on_surface_action(Message::SurfaceAction)
+                    .into(),
+                thickness
+            )
         } else if is_horizontal {
-            let num_windows = filtered_windows.len();
+            let num_active = filtered_windows.len();
+            let num_pinned = closed_pinned_apps.len();
+            let num_windows = num_active + num_pinned;
             let b_width = self.core.applet.suggested_bounds.map(|b| b.width).unwrap_or(1000.0);
-            let max_item_w = if b_width > 100.0 {
-                (b_width / num_windows as f32).min(160.0).max(40.0)
+            
+            let max_item_w = if b_width > 100.0 && num_active > 0 {
+                ((b_width - (num_pinned as f32 * thickness)) / num_active as f32).min(160.0).max(40.0)
             } else {
                 160.0
             };
@@ -463,7 +514,43 @@ impl cosmic::Application for WindowListApplet {
             let mut row = widget::row()
                 .spacing(2)
                 .align_y(Alignment::Center)
+                .width(Length::Shrink)
                 .height(Length::Fill);
+
+            for (pin_idx, app_id) in closed_pinned_apps {
+                let app_info = self.app_map.get(&app_id.to_lowercase()).cloned().unwrap_or_default();
+                let icon_name = if app_info.icon.is_empty() { app_id.as_str() } else { app_info.icon.as_str() };
+                
+                let btn_content = widget::container(
+                    widget::icon::icon(widget::icon::from_name(icon_name).into())
+                        .size(icon_size_px as u16) 
+                        .width(Length::Fixed(icon_size_px))
+                        .height(Length::Fixed(icon_size_px))
+                )
+                .height(Length::Fixed(thickness))
+                .width(Length::Fixed(thickness))
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center);
+
+                let btn = widget::button::custom(btn_content)
+                    .padding(0) 
+                    .height(Length::Fixed(thickness))
+                    .width(Length::Fixed(thickness))
+                    .on_press(Message::LaunchApp(app_id.clone()))
+                    .class(win11_button_style());
+
+                let menu_items = vec![
+                    cosmic::widget::menu::Item::Button("Launch".to_string(), None, WindowAction::LaunchPinned(pin_idx)),
+                    cosmic::widget::menu::Item::Button("✓ Unpin from app tray".to_string(), None, WindowAction::UnpinPinned(pin_idx)),
+                ];
+                let key_binds = HashMap::new();
+                let menu_tree = cosmic::widget::menu::items(&key_binds, menu_items);
+
+                let btn_with_menu = widget::context_menu(btn, Some(menu_tree))
+                    .on_surface_action(Message::SurfaceAction);
+
+                row = row.push(btn_with_menu);
+            }
 
             for (id, _handle, info) in filtered_windows {
                 let app_info = get_app_info(&info.app_id, &info.title, &self.app_map);
@@ -487,12 +574,14 @@ impl cosmic::Application for WindowListApplet {
                         )
                 )
                 .height(Length::Fill)
-                .width(Length::Fixed(max_item_w - 24.0))
+                .width(Length::Fixed(max_item_w)) // Strict fixed width for titles
+                .padding([0, 14])
                 .center_y(Length::Fill);
 
                 let btn = widget::button::custom(btn_content)
-                    .padding([0, 14]) 
-                    .height(Length::Fill)
+                    .padding(0) 
+                    .height(Length::Fixed(thickness))
+                    .width(Length::Fixed(max_item_w))
                     .on_press(Message::Activate(*id))
                     .class(win11_button_style());
                 let mut menu_items = Vec::new();
@@ -524,7 +613,12 @@ impl cosmic::Application for WindowListApplet {
                     menu_items.push(cosmic::widget::menu::Item::Divider);
                 }
 
-                menu_items.push(cosmic::widget::menu::Item::Button("Pin to app tray".to_string(), None, WindowAction::Pin(*id)));
+                let pin_text = if self.config.pinned_apps.contains(&info.app_id) {
+                    "✓ Unpin from app tray".to_string()
+                } else {
+                    "Pin to app tray".to_string()
+                };
+                menu_items.push(cosmic::widget::menu::Item::Button(pin_text, None, WindowAction::Pin(*id)));
                 menu_items.push(cosmic::widget::menu::Item::Divider);
 
                 if same_app_windows.len() > 1 {
@@ -541,30 +635,75 @@ impl cosmic::Application for WindowListApplet {
 
                 row = row.push(btn_with_menu);
             }
-            row.into()
+
+            let total_width = (num_pinned as f32 * thickness) 
+                + (num_active as f32 * max_item_w) 
+                + (num_windows.saturating_sub(1) as f32 * 2.0); // spacing is 2
+            
+            (row.into(), total_width)
         } else {
+            let num_active = filtered_windows.len();
+            let num_pinned = closed_pinned_apps.len();
+            let num_windows = num_active + num_pinned;
+            
             let mut col = widget::column()
                 .spacing(2)
                 .align_x(Alignment::Center)
-                .width(Length::Fill);
+                .width(Length::Fixed(thickness))
+                .height(Length::Shrink);
+
+            for (pin_idx, app_id) in closed_pinned_apps {
+                let app_info = self.app_map.get(&app_id.to_lowercase()).cloned().unwrap_or_default();
+                let icon_name = if app_info.icon.is_empty() { app_id.as_str() } else { app_info.icon.as_str() };
+                
+                let btn = widget::button::custom(
+                    widget::container(
+                        widget::icon::icon(widget::icon::from_name(icon_name).into())
+                            .size(icon_size_px as u16)
+                            .width(Length::Fixed(icon_size_px))
+                            .height(Length::Fixed(icon_size_px))
+                    )
+                    .width(Length::Fixed(thickness))
+                    .height(Length::Fixed(thickness))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+                )
+                .padding(0)
+                .width(Length::Fixed(thickness))
+                .height(Length::Fixed(thickness))
+                .on_press(Message::LaunchApp(app_id.clone()))
+                .class(win11_button_style());
+
+                let menu_items = vec![
+                    cosmic::widget::menu::Item::Button("Launch".to_string(), None, WindowAction::LaunchPinned(pin_idx)),
+                    cosmic::widget::menu::Item::Button("✓ Unpin from app tray".to_string(), None, WindowAction::UnpinPinned(pin_idx)),
+                ];
+                let key_binds = HashMap::new();
+                let menu_tree = cosmic::widget::menu::items(&key_binds, menu_items);
+
+                let btn_with_menu = widget::context_menu(btn, Some(menu_tree))
+                    .on_surface_action(Message::SurfaceAction);
+
+                col = col.push(btn_with_menu);
+            }
 
             for (id, _handle, info) in filtered_windows {
                 let app_info = get_app_info(&info.app_id, &info.title, &self.app_map);
                 let btn = widget::button::custom(
                     widget::container(
                         widget::icon::icon(widget::icon::from_name(app_info.icon.as_str()).into())
-                            .size(256)
+                            .size(icon_size_px as u16)
                             .width(Length::Fixed(icon_size_px))
                             .height(Length::Fixed(icon_size_px))
                     )
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .center_x(Length::Fill)
-                    .center_y(Length::Fill)
+                    .width(Length::Fixed(thickness))
+                    .height(Length::Fixed(thickness))
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center)
                 )
                 .padding(0)
-                .width(Length::Fill)
-                .height(Length::Fill)
+                .width(Length::Fixed(thickness))
+                .height(Length::Fixed(thickness))
                 .on_press(Message::Activate(*id))
                 .class(win11_button_style());
 
@@ -597,7 +736,12 @@ impl cosmic::Application for WindowListApplet {
                     menu_items.push(cosmic::widget::menu::Item::Divider);
                 }
 
-                menu_items.push(cosmic::widget::menu::Item::Button("Pin to app tray".to_string(), None, WindowAction::Pin(*id)));
+                let pin_text = if self.config.pinned_apps.contains(&info.app_id) {
+                    "✓ Unpin from app tray".to_string()
+                } else {
+                    "Pin to app tray".to_string()
+                };
+                menu_items.push(cosmic::widget::menu::Item::Button(pin_text, None, WindowAction::Pin(*id)));
                 menu_items.push(cosmic::widget::menu::Item::Divider);
 
                 if same_app_windows.len() > 1 {
@@ -614,21 +758,28 @@ impl cosmic::Application for WindowListApplet {
 
                 col = col.push(btn_with_menu);
             }
-            col.into()
+            let total_height = (num_windows as f32 * thickness) + (num_windows.saturating_sub(1) as f32 * 2.0);
+            (col.into(), total_height)
         };
 
-        let container = widget::container(list)
-            .height(Length::Fixed(height))
-            .width(Length::Shrink)
-            .center_y(Length::Fill)
-            .center_x(Length::Fill);
-
-        let mut limits = Limits::NONE.min_width(1.0).min_height(1.0);
-        if let Some(b) = self.core.applet.suggested_bounds {
-            limits = limits.max_width(if b.width > 40.0 { b.width } else { 1600.0 });
-            limits = limits.max_height(height);
+        let (list, list_size) = list_data;
+        let container = if is_horizontal {
+            widget::container(list)
+                .height(Length::Fixed(thickness))
+                .width(Length::Fixed(list_size))
         } else {
-            limits = limits.max_width(1600.0).max_height(height);
+            widget::container(list)
+                .width(Length::Fixed(thickness))
+                .height(Length::Fixed(list_size))
+        };
+
+        let mut limits = Limits::NONE;
+        if is_horizontal {
+            limits = limits.min_width(list_size).max_width(list_size)
+                           .min_height(thickness).max_height(thickness);
+        } else {
+            limits = limits.min_width(thickness).max_width(thickness)
+                           .min_height(list_size).max_height(list_size);
         }
 
         self.core.applet.autosize_window(container)
