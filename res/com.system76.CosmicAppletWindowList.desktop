@@ -7,3 +7,5 @@ Exec=cosmic-applet-window-list
 Terminal=false
 Categories=Cosmic;Applet;
 X-CosmicApplet=true
+X-OverflowMinSize=1
+X-OverflowPriority=1

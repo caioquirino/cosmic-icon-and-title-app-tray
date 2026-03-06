@@ -507,7 +507,12 @@ impl cosmic::Application for WindowListApplet {
             let b_width = self.core.applet.suggested_bounds.map(|b| b.width).unwrap_or(1000.0);
             
             let max_item_w = if b_width > 100.0 && num_active > 0 {
-                ((b_width - (num_pinned as f32 * thickness)) / num_active as f32).min(160.0).max(40.0)
+                let available = (b_width - (num_pinned as f32 * thickness)) / num_active as f32;
+                if self.config.expand_centered {
+                    available.max(40.0)
+                } else {
+                    available.min(160.0).max(40.0)
+                }
             } else {
                 160.0
             };
@@ -515,7 +520,7 @@ impl cosmic::Application for WindowListApplet {
             let mut row = widget::row()
                 .spacing(2)
                 .align_y(Alignment::Center)
-                .width(Length::Shrink)
+                .width(if self.config.expand_centered { Length::Fill } else { Length::Shrink })
                 .height(Length::Fill);
 
             for (pin_idx, app_id) in closed_pinned_apps {
@@ -684,9 +689,13 @@ impl cosmic::Application for WindowListApplet {
                 row = row.push(btn_with_menu);
             }
 
-            let total_width = (num_pinned as f32 * thickness) 
-                + (num_active as f32 * max_item_w) 
-                + (num_windows.saturating_sub(1) as f32 * 2.0); // spacing is 2
+            let total_width = if self.config.expand_centered {
+                self.core.applet.suggested_bounds.map(|b| b.width).unwrap_or(1000.0)
+            } else {
+                (num_pinned as f32 * thickness) 
+                    + (num_active as f32 * max_item_w) 
+                    + (num_windows.saturating_sub(1) as f32 * 2.0) // spacing is 2
+            };
             
             (row.into(), total_width)
         } else {
@@ -841,9 +850,14 @@ impl cosmic::Application for WindowListApplet {
 
         let (list, list_size) = list_data;
         let container = if is_horizontal {
-            widget::container(list)
-                .height(Length::Fixed(thickness))
-                .width(Length::Fixed(list_size))
+            let container = widget::container(list);
+            if self.config.expand_centered {
+                container.center_x(Length::Fill)
+                    .center_y(Length::Fixed(thickness))
+                    .padding([0, 4])
+            } else {
+                container.width(Length::Fixed(list_size)).height(Length::Fixed(thickness))
+            }
         } else {
             widget::container(list)
                 .width(Length::Fixed(thickness))
@@ -852,8 +866,17 @@ impl cosmic::Application for WindowListApplet {
 
         let mut limits = Limits::NONE;
         if is_horizontal {
-            limits = limits.min_width(list_size).max_width(list_size)
-                           .min_height(thickness).max_height(thickness);
+            if self.config.expand_centered {
+                let target_w = self.core.applet.suggested_bounds.map(|b| b.width).unwrap_or(4000.0);
+                // By using list_size as min_width, we allow the panel to shrink the applet
+                // if other applets need space.
+                // By using target_w as max_width, we ensure it doesn't overlap neighbors.
+                limits = limits.min_width(list_size.min(target_w)).max_width(target_w)
+                               .min_height(thickness).max_height(thickness);
+            } else {
+                limits = limits.min_width(list_size).max_width(list_size)
+                               .min_height(thickness).max_height(thickness);
+            }
         } else {
             limits = limits.min_width(thickness).max_width(thickness)
                            .min_height(list_size).max_height(list_size);
