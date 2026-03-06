@@ -13,38 +13,58 @@ A COSMIC desktop panel applet that shows open window icons and titles in a Windo
 - High-quality icon rendering (SVG-preferred, correct resolution lookup)
 - Persistent configuration via `cosmic-config`
 
-## Prerequisites
-
-**Rust toolchain** — install via [rustup](https://rustup.rs).
-
-**System libraries** (Arch / EndeavourOS):
-```bash
-sudo pacman -S wayland libxkbcommon
-```
-
-**System libraries** (Ubuntu / Pop!_OS):
-```bash
-sudo apt install libwayland-dev libxkbcommon-dev
-```
-
-## Building
-
-```bash
-make build          # release build (default)
-make check          # fast type-check without linking
-```
-
-The binary is written to `target/release/cosmic-applet-window-list`.
+---
 
 ## Installation
 
+### From binaries / packages
+
+Pre-built packages are attached to each [GitHub Release](https://github.com/caioquirino/cosmic-icon-and-title-app-tray/releases).
+
+**Arch Linux** — install with the provided PKGBUILD:
+```bash
+# Download PKGBUILD from the release assets, then:
+makepkg -si
+```
+Or install the pre-built `.pkg.tar.zst` directly:
+```bash
+sudo pacman -U cosmic-applet-window-list-*.pkg.tar.zst
+```
+
+**Debian / Ubuntu / Pop!_OS** — install the `.deb`:
+```bash
+sudo dpkg -i cosmic-applet-window-list_*.deb
+```
+
+**Fedora / openSUSE / RPM-based** — install the `.rpm`:
+```bash
+sudo rpm -i cosmic-applet-window-list-*.rpm
+# or with dnf:
+sudo dnf install cosmic-applet-window-list-*.rpm
+```
+
+After installing, register the applet's `.desktop` entry with COSMIC Panel and add it through **COSMIC Settings → Panel → Add Applet**.
+
+---
+
+### From source
+
+**Prerequisites** — Rust toolchain via [rustup](https://rustup.rs), plus system libraries:
+
+```bash
+# Arch / EndeavourOS
+sudo pacman -S wayland libxkbcommon
+
+# Ubuntu / Pop!_OS / Debian
+sudo apt install libwayland-dev libxkbcommon-dev
+```
+
+**Build and install** to `~/.local` (default):
 ```bash
 make install
 ```
 
-This installs the binary to `~/.local/bin/` and the `.desktop` entry to `~/.local/share/applications/` by default. Then add the applet through **COSMIC Settings → Panel → Add Applet**.
-
-To install to a different prefix (e.g. system-wide):
+To install system-wide:
 ```bash
 make install PREFIX=/usr/local
 ```
@@ -59,22 +79,25 @@ To remove:
 make uninstall
 ```
 
+---
+
 ## Development Workflow
 
 ```bash
-make dev        # debug build + restart running applet
-make run        # build release and run standalone (outside the panel)
+make dev        # debug build + restart running applet (fast iteration loop)
+make run        # build release and run standalone, outside the panel
 make log        # same as run but with RUST_LOG=debug
+make check      # fast type-check without linking
 make fmt        # cargo fmt
 make clippy     # cargo clippy
 make clean      # cargo clean
 ```
 
-`make dev` is the fast inner loop: it does a debug build and hot-restarts the applet without touching the `.desktop` entry or reinstalling.
+---
 
 ## Configuration
 
-Configuration is stored by `cosmic-config` under app ID `io.github.caioquirino.CosmicWindowList` (version 1). The following fields are persisted:
+Configuration is stored by `cosmic-config` under app ID `io.github.caioquirino.CosmicWindowList` (version 1).
 
 | Field | Default | Description |
 |---|---|---|
@@ -85,6 +108,8 @@ Configuration is stored by `cosmic-config` under app ID `io.github.caioquirino.C
 | `item_max_width` | `300.0` | Maximum width (px) of a single window item |
 
 Pin/unpin and workspace filtering can be changed at runtime via the context menu. The other options currently require editing the config file directly.
+
+---
 
 ## Project Structure
 
