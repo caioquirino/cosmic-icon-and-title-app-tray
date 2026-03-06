@@ -2,6 +2,29 @@
 name = "cosmic-applet-window-list"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "COSMIC desktop panel applet showing open window icons and titles (Windows 11-style taskbar)"
+repository = "https://github.com/caioquirino/cosmic-icon-and-title-app-tray"
+
+[package.metadata.deb]
+maintainer = "Caio Quirino <https://github.com/caioquirino>"
+copyright = "2024, Caio Quirino"
+extended-description = """A COSMIC desktop panel applet that shows open window icons and titles \
+in a Windows 11-style taskbar. Supports app pinning, workspace filtering, \
+and per-window context menus with desktop actions."""
+depends = "$auto"
+section = "x11"
+priority = "optional"
+assets = [
+  ["target/release/cosmic-applet-window-list", "usr/bin/", "755"],
+  ["res/com.system76.CosmicAppletWindowList.desktop", "usr/share/applications/", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+  { source = "target/release/cosmic-applet-window-list", dest = "/usr/bin/cosmic-applet-window-list", mode = "755" },
+  { source = "res/com.system76.CosmicAppletWindowList.desktop", dest = "/usr/share/applications/com.system76.CosmicAppletWindowList.desktop", mode = "644" },
+]
 
 [dependencies]
 cctk = { git = "https://github.com/pop-os/cosmic-protocols", package = "cosmic-client-toolkit" }

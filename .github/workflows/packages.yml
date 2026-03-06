@@ -1,0 +1,151 @@
+name: Release Packages
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY: cosmic-applet-window-list
+
+jobs:
+  # ── Build binary + .deb + .rpm on Ubuntu ──────────────────────────────────
+  linux:
+    name: Linux packages (deb + rpm)
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          echo "value=$(grep '^version' Cargo.toml | head -1 | sed 's/.*\"\(.*\)\".*/\1/')" >> $GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system & packaging dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libwayland-dev libxkbcommon-dev dpkg-dev
+
+      - name: Install cargo-deb and cargo-generate-rpm
+        run: cargo install cargo-deb cargo-generate-rpm --locked
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Strip binary
+        run: strip target/release/${{ env.BINARY }}
+
+      - name: Build .deb
+        run: cargo deb --no-build
+
+      - name: Build .rpm
+        run: cargo generate-rpm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: target/debian/*.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: target/generate-rpm/*.rpm
+
+  # ── Arch Linux: PKGBUILD + .pkg.tar.zst ───────────────────────────────────
+  arch:
+    name: Arch Linux package
+    needs: linux
+    runs-on: ubuntu-22.04
+    container:
+      image: archlinux:latest
+    env:
+      VERSION: ${{ needs.linux.outputs.version }}
+    steps:
+      # Install git first so actions/checkout can use it
+      - name: Install base dependencies
+        run: pacman -Syu --noconfirm base-devel rust cargo git
+
+      - uses: actions/checkout@v4
+
+      - name: Generate PKGBUILD
+        run: |
+          cat > PKGBUILD << EOF
+          # Maintainer: Caio Quirino <https://github.com/caioquirino>
+          pkgname=cosmic-applet-window-list
+          pkgver=${VERSION}
+          pkgrel=1
+          pkgdesc='COSMIC desktop panel applet showing open window icons and titles (Windows 11-style taskbar)'
+          arch=('x86_64' 'aarch64')
+          url='https://github.com/caioquirino/cosmic-icon-and-title-app-tray'
+          license=('MIT')
+          depends=('wayland' 'libxkbcommon')
+          makedepends=('rust' 'cargo')
+          source=("\${pkgname}-\${pkgver}.tar.gz::https://github.com/caioquirino/cosmic-icon-and-title-app-tray/archive/refs/tags/v\${pkgver}.tar.gz")
+          # Update sha256sums before submitting to AUR:
+          #   curl -sL <url> | sha256sum
+          sha256sums=('SKIP')
+
+          build() {
+            cd "\${srcdir}/cosmic-icon-and-title-app-tray-\${pkgver}"
+            cargo build --release --config 'net.git-fetch-with-cli = true'
+          }
+
+          package() {
+            cd "\${srcdir}/cosmic-icon-and-title-app-tray-\${pkgver}"
+            install -Dm755 target/release/cosmic-applet-window-list "\${pkgdir}/usr/bin/cosmic-applet-window-list"
+            install -Dm644 res/com.system76.CosmicAppletWindowList.desktop "\${pkgdir}/usr/share/applications/com.system76.CosmicAppletWindowList.desktop"
+          }
+          EOF
+
+      - name: Create source tarball (mirrors GitHub archive format)
+        run: |
+          git archive \
+            --prefix="cosmic-icon-and-title-app-tray-${VERSION}/" \
+            HEAD \
+            | gzip > "cosmic-applet-window-list-${VERSION}.tar.gz"
+
+      - name: Build Arch package
+        run: |
+          # makepkg refuses to run as root — create a build user with sudo
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+          chown -R builder:builder .
+          WORKDIR="$(pwd)"
+          # Pre-place the tarball so makepkg uses it instead of downloading
+          su builder -c "cd $WORKDIR && SRCDEST=$WORKDIR makepkg --noconfirm --syncdeps"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: |
+            *.pkg.tar.zst
+            PKGBUILD
+
+  # ── Attach all packages to the GitHub Release ─────────────────────────────
+  release:
+    name: GitHub Release
+    needs: [linux, arch]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.deb
+            *.rpm
+            *.pkg.tar.zst
+            PKGBUILD
