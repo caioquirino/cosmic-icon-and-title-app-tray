@@ -503,18 +503,19 @@ impl cosmic::Application for WindowListApplet {
         } else if is_horizontal {
             let num_active = filtered_windows.len();
             let num_pinned = closed_pinned_apps.len();
-            let num_windows = num_active + num_pinned;
             let b_width = self.core.applet.suggested_bounds.map(|b| b.width).unwrap_or(1000.0);
             
-            let max_item_w = if b_width > 100.0 && num_active > 0 {
-                let available = (b_width - (num_pinned as f32 * thickness)) / num_active as f32;
+            let active_item_width = if b_width > 10.0 && num_active > 0 {
+                let spacing_total = ((num_active + num_pinned).saturating_sub(1) as f32 * 2.0);
+                let pinned_total = num_pinned as f32 * thickness;
+                let available = (b_width - spacing_total - pinned_total) / num_active as f32;
                 if self.config.expand_centered {
-                    available.max(40.0)
+                    available.min(self.config.item_max_width).max(thickness)
                 } else {
-                    available.min(160.0).max(40.0)
+                    thickness.min(160.0) // fallback
                 }
             } else {
-                160.0
+                thickness
             };
 
             let mut row = widget::row()
@@ -581,7 +582,7 @@ impl cosmic::Application for WindowListApplet {
                         )
                 )
                 .height(Length::Fixed(thickness))
-                .width(Length::Fixed(max_item_w)) // Strict fixed width for titles
+                .width(Length::Fixed(active_item_width)) // Shared equal width
                 .padding([0, 14])
                 .center_y(Length::Fill);
 
@@ -599,7 +600,7 @@ impl cosmic::Application for WindowListApplet {
 
                     // Add a small indicator at the bottom
                     let indicator = widget::container(widget::column().width(Length::Fill).height(Length::Fixed(2.0)))
-                        .width(Length::Fixed(max_item_w * 0.4))
+                        .width(Length::Fixed(active_item_width * 0.4))
                         .height(Length::Fixed(2.0))
                         .style(|theme: &cosmic::Theme| {
                             let cosmic = theme.cosmic();
@@ -627,14 +628,14 @@ impl cosmic::Application for WindowListApplet {
                             )
                     )
                     .height(Length::Fixed(thickness))
-                    .width(Length::Fixed(max_item_w))
+                    .width(Length::Fixed(active_item_width))
                     .align_y(Alignment::End);
                 }
 
                 let btn = widget::button::custom(btn_content)
                     .padding(0) 
                     .height(Length::Fixed(thickness))
-                    .width(Length::Fixed(max_item_w))
+                    .width(Length::Fixed(active_item_width))
                     .on_press(Message::Activate(*id))
                     .class(win11_button_style());
                 let mut menu_items = Vec::new();
@@ -693,8 +694,8 @@ impl cosmic::Application for WindowListApplet {
                 self.core.applet.suggested_bounds.map(|b| b.width).unwrap_or(1000.0)
             } else {
                 (num_pinned as f32 * thickness) 
-                    + (num_active as f32 * max_item_w) 
-                    + (num_windows.saturating_sub(1) as f32 * 2.0) // spacing is 2
+                    + (num_active as f32 * active_item_width) 
+                    + ((num_active + num_pinned).saturating_sub(1) as f32 * 2.0) // spacing is 2
             };
             
             (row.into(), total_width)
